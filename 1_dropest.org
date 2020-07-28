@@ -1,0 +1,961 @@
+#+OPTIONS: :exports both
+#+PROPERTY: header-args :exports both :eval never-export
+#+SETUPFILE: https://fniessen.github.io/org-html-themes/setup/theme-readtheorg.setup
+#+OPTIONS: H:4 num:nil toc:5
+#+AUTHOR: Mehmet Tekman
+#+options: timestamp:nil
+
+#+TITLE: Bismark dropEst Analysis
+
+
+* Initial Attempt
+
+  This was frought with errors relating to misconfigured params
+
+** Part 1: Using first data set
+
+ This was a half set of 4 batches (later confirmed to be around 300 cells), based on the Galaxy history *Bismark: Mapping_Data_Velocity*, each starting with the prefix _aMI_DMSO_.
+
+*** Pre-requisites: Tools and Data
+
+**** Get and Build Tools
+
+   Let's use DropEst and Kallisto, and mentioned in the [[https://dropest.readthedocs.io/en/latest/alignment.html][docs]]. The dropest conda environment failed miserably (as is sadly the case with conda tools these days...), so I decided to build from scratch.
+
+***** Make Folders
+
+      #+begin_src bash
+        mkdir tools transcript 0_history_data\
+            1_processed_by_droptag 2_kallisto_bams 3_matrices_by_dropest 4_output_matrix
+      #+end_src
+
+***** DropEst and DropTag
+
+      #+begin_src bash
+        # Install deps
+        sudo apt install cmake libbamtools-dev bamtools libboost-all-dev
+        # Build
+        git clone git@github.com:hms-dbmi/dropEst.git
+
+        cd dropEst
+        cmake CMakeLists.txt && make
+        sudo make install
+        cd ..
+
+        mv dropEst/ tools
+      #+end_src
+
+***** Kallisto
+
+      #+begin_src bash
+        git clone git@github.com:pachterlab/kallisto.git
+        cd kallisto
+        cmake CMakeLists.txt && make
+        sudo make install
+        cd ..
+        mv kallisto/ tools
+      #+end_src
+
+**** Get Data
+
+     Download FASTQ data from shared history
+
+     #+begin_src python
+       #!/usr/bin/env python3
+
+       from bioblend import galaxy
+
+       gi = galaxy.GalaxyInstance(url="https://usegalaxy.eu", key='b2691fc87c1e1492f0400fb0b31a9fee')
+       hc = galaxy.histories.HistoryClient(gi)
+       hl = gi.histories.get_histories()
+
+       dc = galaxy.datasets.DatasetClient(gi)
+
+       histories = list(filter(lambda x: x['name'].startswith("Bismark: Mapping_Data_Velocity"), hl))
+       hist = histories[0]
+
+       tmp = hc.show_history(hist['id'])
+       h_id = tmp['id']
+       sets = tmp['state_ids']['ok']
+
+       for se in sets:
+           print(se, end=" ", flush=True)
+           dc.download_dataset(se, "/extra/bismark/0_history_data", use_default_filename = True)
+           print("done")
+
+     #+end_src
+
+
+*** Run the Analysis
+
+**** DropTag
+
+     It is mentioned [[https://dropest.readthedocs.io/en/latest/droptag.html#cel-seq2][here]] that the CEL-Seq2 implementation wasn't properly tested.
+
+     #+begin_src bash
+       droptag -c tools/dropEst/configs/cel_seq2.xml -s -S 0_history_data/aMI_DMSO_E14_RP13_R{1,2}.fastq.gz
+       droptag -c tools/dropEst/configs/cel_seq2.xml -s -S 0_history_data/aMI_DMSO_E14_RP14_R{1,2}.fastq.gz
+       droptag -c tools/dropEst/configs/cel_seq2.xml -s -S 0_history_data/aMI_DMSO_E14_RP15_R{1,2}.fastq.gz
+       droptag -c tools/dropEst/configs/cel_seq2.xml -s -S 0_history_data/aMI_DMSO_E14_RP16_R{1,2}.fastq.gz
+
+       # Outputs deposit into cwd, move to folder
+       mv aMI_* 1_processed_by_droptag/
+     #+end_src
+
+**** Kallisto
+
+***** Get Transcript
+
+      #+begin_src bash
+        wget ftp://ftp.ensembl.org/pub/release-99/fasta/mus_musculus/cdna/Mus_musculus.GRCm38.cdna.all.fa.gz\
+            -O transcript/Mus_musculus.GRCm38.cdna.all.fa.gz
+      #+end_src
+
+      No GTF needed
+
+***** Build the Index
+
+      #+begin_src bash
+        kallisto index -i transcript/kallisto.index transcript/Mus_musculus.GRCm38.cdna.all.fa.gz
+      #+end_src
+
+***** Quantify BAM
+
+****** Determine mean fragment size
+
+       Here we need to know the mean_length and std_length (stdev) of the RNA fragment length. For now we will estimate the average read length and add the length of the primers on both sides.
+
+         #+begin_src awk
+           zcat 1_processed_by_droptag/aMI_DMSO_E14_RP1*.2.fastq.gz\
+           | pv\
+           | awk 'BEGIN {t=0.0;sq=0.0; n=0;};NR%4==2 {n++;L=length($0);t+=L;sq+=L*L;} END {m=t/n;printf("total %d avg=%f stddev=%f\n",n,m,sq/n-m*m);}'
+
+         #+end_src
+
+         Yields 70bp+-0bp.
+
+         The primers given at [[https://static-content.springer.com/esm/art%3A10.1186%2Fs13059-016-0938-8/MediaObjects/13059_2016_938_MOESM4_ESM.docx][Supplementary File 1]] of [[https://genomebiology.biomedcentral.com/articles/10.1186/s13059-016-0938-8#MOESM4][the paper]] on page 2 are each 82bp long.
+
+         + The fragment size is :: Read1_Adapter + Read1 + (inner_distance) + Read2 + Read2_Adapter
+           - Read 1 Adapter :: IlluP1 + T7Promoter
+             - T7Promoter :: [[https://www.sigmaaldrich.com/life-science/molecular-biology/cloning-and-expression/vector-systems/t7-promoter-system.html][Ref]] 18bp
+             - IlluP1 :: [[https://support.illumina.com/content/dam/illumina-support/documents/documentation/chemistry_documentation/experiment-design/illumina-adapter-sequences-1000000002694-12.pdf][Sequences]] 10bp long
+           - Read 1 :: 12bp + overtrail (6bp UMI, 6bp CB)
+           - Read 2 :: 70bp
+           - Read 2 Adapter :: I don't believe there is one...
+
+
+         This adds up to (+ 18 10 12 70) = 110bp
+
+         We will proceed with this amount until I get a better estimate. For st deviation I set it to 30 for non-specific reasons.
+
+****** Perform Alignment(ish)
+
+******* L 110 and S 30
+
+        #+begin_src bash
+          for fastq in 1_processed_by_droptag/aMI_DMSO_E14_RP1{3,4,5,6}_R2.fastq.gz.tagged.2.fastq.gz; do
+              outname=2_kallisto_bams_110_30/$(basename $fastq)/;
+              mkdir -p $outname;
+              kallisto quant --pseudobam --single -i transcript/kallisto.index -o $outname -l 110 -s 30 $fastq;
+          done
+
+          grep "p_" ./2_kallisto_bams_110_30/*/*.json -R\
+              | cut -d: -f 2,3 | sed ':a;N;$!ba;s/\n//g' | sed 's/"p_pseudo/\n"p_pseudo/g'
+        #+end_src
+
+        "p_pseudoaligned": 53.6,        "p_unique": 23.5,
+        "p_pseudoaligned": 52.7,        "p_unique": 23.1,
+        "p_pseudoaligned": 52.9,        "p_unique": 23.2,
+        "p_pseudoaligned": 48.4,        "p_unique": 21.0,
+
+******* L 82 and S 10
+
+        #+begin_src bash
+          for fastq in 1_processed_by_droptag/aMI_DMSO_E14_RP1{3,4,5,6}_R2.fastq.gz.tagged.2.fastq.gz; do
+              outname=2_kallisto_bams_82_10/$(basename $fastq)/;
+              mkdir -p $outname;
+              kallisto quant --pseudobam --single -i transcript/kallisto.index -o $outname -l 82 -s 10 $fastq;
+          done
+
+          grep "p_" ./2_kallisto_bams_82_10/*/*.json -R\
+              | cut -d: -f 2,3 | sed ':a;N;$!ba;s/\n//g' | sed 's/"p_pseudo/\n"p_pseudo/g'
+        #+end_src
+
+        "p_pseudoaligned": 56.8,        "p_unique": 24.4,
+        "p_pseudoaligned": 55.7,        "p_unique": 23.9,
+        "p_pseudoaligned": 56.1,        "p_unique": 24.1,
+        "p_pseudoaligned": 51.1,        "p_unique": 21.8,
+
+        Slightly higher percentage of mapped reads overall in both percentage of pseudoaligned reads and unique. Let's increase the STDEV with 82 again.
+
+******* L 82 and S 25
+
+        #+begin_src bash
+          for fastq in 1_processed_by_droptag/aMI_DMSO_E14_RP1{3,4,5,6}_R2.fastq.gz.tagged.2.fastq.gz; do
+              outname=2_kallisto_bams_82_25/$(basename $fastq)/;
+              mkdir -p $outname;
+              kallisto quant --pseudobam --single -i transcript/kallisto.index -o $outname -l 82 -s 25 $fastq;
+          done
+
+          grep "p_" ./2_kallisto_bams_82_25/*/*.json -R\
+              | cut -d: -f 2,3 | sed ':a;N;$!ba;s/\n//g' | sed 's/"p_pseudo/\n"p_pseudo/g'
+        #+end_src
+
+        "p_pseudoaligned": 56.8,        "p_unique": 24.4,
+        "p_pseudoaligned": 55.7,        "p_unique": 23.9,
+        "p_pseudoaligned": 56.1,        "p_unique": 24.1,
+        "p_pseudoaligned": 51.1,        "p_unique": 21.8,
+
+        Literally no difference, from previous run. Okay let's reduce L to 70 (the read_length) and see if the improvement continues.
+
+******* L 70 and S 5
+
+        #+begin_src bash
+          for fastq in 1_processed_by_droptag/aMI_DMSO_E14_RP1{3,4,5,6}_R2.fastq.gz.tagged.2.fastq.gz; do
+              outname=2_kallisto_bams_70_05/$(basename $fastq)/;
+              mkdir -p $outname;
+              kallisto quant --pseudobam --single -i transcript/kallisto.index -o $outname -l 70 -s 5 $fastq;
+          done
+
+          grep "p_" ./2_kallisto_bams_70_05/*/*.json -R\
+              | cut -d: -f 2,3 | sed ':a;N;$!ba;s/\n//g' | sed 's/"p_pseudo/\n"p_pseudo/g'
+        #+end_src
+
+        "p_pseudoaligned": 58.1,        "p_unique": 24.7,
+        "p_pseudoaligned": 57.0,        "p_unique": 24.3,
+        "p_pseudoaligned": 57.3,        "p_unique": 24.4,
+        "p_pseudoaligned": 52.3,        "p_unique": 22.0,
+
+        Marginal improvements. I am not willing to go lower than the read length.
+
+******* L 70 and S 5 with single overhang
+
+         "For reads that are produced by 3’-end sequencing, the --single-overhang option does not discard reads where the expected fragment size goes beyond the transcript start." [[http://pachterlab.github.io/kallisto/manual.html][src]]
+         CELSeq2 is 3'biased so why not.
+
+        #+begin_src bash
+          for fastq in 1_processed_by_droptag/aMI_DMSO_E14_RP1{3,4,5,6}_R2.fastq.gz.tagged.2.fastq.gz; do
+              outname=2_kallisto_bams_70_05_overhang/$(basename $fastq)/;
+              mkdir -p $outname;
+              kallisto quant --pseudobam --single --single-overhang -i transcript/kallisto.index -o $outname -l 70 -s 5 $fastq;
+          done
+
+          grep "p_" ./2_kallisto_bams_70_05_overhang/*/*.json -R\
+              | cut -d: -f 2,3 | sed ':a;N;$!ba;s/\n//g' | sed 's/"p_pseudo/\n"p_pseudo/g'
+
+        #+end_src
+
+        "p_pseudoaligned": 60.2,        "p_unique": 25.0,
+        "p_pseudoaligned": 59.3,        "p_unique": 24.5,
+        "p_pseudoaligned": 59.6,        "p_unique": 24.7,
+        "p_pseudoaligned": 54.1,        "p_unique": 22.2,
+
+        This is as good as it will go, let's use this one.
+
+
+**** DropEst
+
+***** Params
+
+       Some [[https://dropest.readthedocs.io/en/latest/dropest.html][dropest params]] we need to use
+       + =-r= :: We need to use here to pass in the params.gz in the 1_processed_by_droptag which contains the barcode and UMI for each @TAG. Feed in with spaces, but quotes around the whole list.
+       + =-b= :: print tagged bam files
+       + =-c= :: config file. Maybe we pass in =dropEst/configs/celseq2.xml= ?
+       + =-L= :: By default counts UMIs which exist in: exonic reads, exonics and intronic reads, ex + in + unnotated reads.
+       + =-o= :: output file
+       + =-P= :: use pseudoaligner ← yep, kallisto
+       + =-u= :: correct umis in directional
+       + =-V= :: save sepeate matrices for exons, introns, and exon/intron spanning reads (for Velocyto)
+       + =-w= :: use mm format -- this will be useful to use with scanpy, otherwise it outputs rds
+
+***** Run
+
+
+       #+begin_src bash
+         comm=$(echo dropest -P -u -V -w -o 3_matrices_by_dropest/matrices\
+             -r 1_processed_by_droptag/aMI_DMSO_E14_RP1{3,4,5,6}_R2.fastq.gz.tagged.params.gz\
+             -c tools/dropEst/configs/cel_seq2.xml\
+             2_kallisto_bams_70_05_overhang/aMI_DMSO_E14_RP1{3,4,5,6}_R2.fastq.gz.tagged.2.fastq.gz/pseudoalignments.bam\
+                    | sed 's|-r |-r "|' | sed 's| -c |" -c |')
+         echo $comm
+         eval $comm
+
+
+         cp -v 3_matrices_by_dropest/matrices.{mtx,genes.tsv,cells.tsv} 4_output_matrix/
+
+       #+end_src
+
+
+***** Summary
+
+      #+begin_src bash
+        wc -l 4_output_matrix/matrices.{genes,cells}.tsv | head -2
+      #+end_src
+
+         11376 matrices.genes.tsv
+           298 matrices.cells.tsv
+
+     300 cells in total, I wonder if that's what is expected, given that we had 15 input files... It is likely that some tags were reused (as is very common in the MPI setup, but not neccesarily common to the CELSeq2 protocol).
+
+
+***** Notes
+
+      So there is no way that the Velocyto matrices will have anything under "intron" or "spanning" since:
+
+    1. We mapped to the transcriptome
+    2. CELSeq2 is 3' bias
+
+       Luckily, =Velocity= is not being used and [[https://scvelo.readthedocs.io/][scVelo]] is, meaning that =ScanPy= will be used, and we should export to the mtx format.
+
+**** Optional Steps
+
+     These stages are technically part of the DropEst pipeline, but they are just Rscripts to summarize and filter the count matrix, of which there are better tools (e.g. ScanPy itself, or DropletUtils).
+
+***** DropReport (Cancelled)
+
+      Summarizes the quality
+
+****** Installation
+
+       Below did not work because R was pinned to latest.
+
+       #+begin_src R
+       install.packages(c("knitr", "optparse","rmarkdown"))
+       #+end_src
+
+       Use conda instead
+
+       #+begin_src bash
+         conda create -n droprep r=3.5.1 r-optparse r-rmarkdown dropest
+       #+end_src
+
+       Still no luck, but this step is not actually neccesary.
+
+***** DropEstR (Cancelled)
+
+      This step filters low quality cells, but we have the same issues as above so cannot run this step.
+
+      This is now essentially a downstream problem, so this can be sorted by using ScanPy, or DropletUtils, both of which are available in Galaxy.
+
+
+*** Conclusions So Far
+
+  We ran DropTag, Kallisto, and DropEst to perform quantification of CELSeq2 data. Due to the 3'bias heavy protocol and the fact that we mapped to the transcriptome, we have no splice information - which is a pre-requisite for =RNA Velocity= but not =scVelo=.
+
+  We also discovered only 300 cells, which I'm assuming is due to the reuse of barcodes at the MPI lab for this protocol, so we need to repeat the quantification stage *without* feeding all BAM files together.
+
+
+** Part 2: Full Set
+
+ This is the complete set of 8 batches, said to be of around 600 cells. This is based on the  Galaxy history *Bismark: Microinjected_cells_All*, 4 starting with the prefix _aMI_DMSO_E14_RP1{3,4,5,6}_ and 4 with _aMI_EPZ_E14_RP{1,2,3,4}_.
+
+*** Pre-requisites: Tools and Data
+
+**** (Skipped) Get and Build Tools
+
+     Already built in Part 1.
+
+***** Make Folders
+
+      First let's move all data runs from the previous part into a seperate folder, and then create the other necessary folders
+
+      #+begin_src bash
+        mkdir -p /extra/bismark/part1 && mv /extra/bismark/{0,1,2,3,4}_* /extra/bismark/part1;
+
+        mkdir 0_history_data 1_processed_by_droptag 2_kallisto_bams 3_matrices_by_dropest 4_output_matrix
+      #+end_src
+
+
+**** Get Data
+
+     Download FASTQ data from shared history
+
+     #+begin_src python
+       #!/usr/bin/env python
+
+       from bioblend import galaxy
+
+       gi = galaxy.GalaxyInstance(url="https://usegalaxy.eu", key='b2691fc87c1e1492f0400fb0b31a9fee')
+       hc = galaxy.histories.HistoryClient(gi)
+       hl = gi.histories.get_histories()
+
+       dc = galaxy.datasets.DatasetClient(gi)
+
+       histories = list(filter(lambda x: x['name'].startswith("Bismark: Microinjected_cells_All"), hl))
+       hist = histories[0]
+
+       tmp = hc.show_history(hist['id'])
+       h_id = tmp['id']
+       sets = tmp['state_ids']['ok']
+
+       for se in sets:
+           print(se, end=" ", flush=True)
+           dc.download_dataset(se, "/extra/bismark/0_history_data_2", use_default_filename = True)
+           print("done")
+
+     #+end_src
+
+
+*** Run the Analysis
+    
+**** DropTag
+
+     It is mentioned [[https://dropest.readthedocs.io/en/latest/droptag.html#cel-seq2][here]] that the CEL-Seq2 implementation wasn't properly tested.
+
+     #+begin_src bash
+       droptag -c tools/dropEst/configs/cel_seq2.xml -s -S 0_history_data/aMI_EPZ_E14_RP1_R{1,2}.fastq.gz
+       droptag -c tools/dropEst/configs/cel_seq2.xml -s -S 0_history_data/aMI_EPZ_E14_RP2_R{1,2}.fastq.gz
+       droptag -c tools/dropEst/configs/cel_seq2.xml -s -S 0_history_data/aMI_EPZ_E14_RP3_R{1,2}.fastq.gz
+       droptag -c tools/dropEst/configs/cel_seq2.xml -s -S 0_history_data/aMI_EPZ_E14_RP4_R{1,2}.fastq.gz
+       droptag -c tools/dropEst/configs/cel_seq2.xml -s -S 0_history_data/aMI_DMSO_E14_RP13_R{1,2}.fastq.gz
+       droptag -c tools/dropEst/configs/cel_seq2.xml -s -S 0_history_data/aMI_DMSO_E14_RP14_R{1,2}.fastq.gz
+       droptag -c tools/dropEst/configs/cel_seq2.xml -s -S 0_history_data/aMI_DMSO_E14_RP15_R{1,2}.fastq.gz
+       droptag -c tools/dropEst/configs/cel_seq2.xml -s -S 0_history_data/aMI_DMSO_E14_RP16_R{1,2}.fastq.gz
+
+       # Outputs deposit into cwd, move to folder
+       mv aMI_* 1_processed_by_droptag/
+     #+end_src
+
+***** NOTE:
+      + Dataset =aMI_EPZ_E14_RP3_R{1,2}.fastq.gz= was not tagged properly, or at least a =tagged.2.fastq.gz= was not generated.
+      + Inspecting the file did not reveal anything obvious:
+        - neither the R1 or R2 file was truncated at the end
+        - the number of lines between R1 and R2 matched
+        - the number of optical duplicates were not unnaturally higher than any other dataset.
+        - A redownload of the datasets confirms that it was downloaded file
+        - It /does/ have the smallest file size of R1 (120M compared ~ 200M) and R2 (308M compared ~ 550M) files, which explains why it never reaches 10e6 reads during the log report.
+        - Renaming the file set to something simpler also failed
+        - A test of whether the tags between R1 and R2 match:
+
+          #+begin_src bash
+            zcat 0_history_data/aMI_EPZ_E14_RP3_R1.fastq.gz | awk 'NR%4==1 {print $1}' > tags.R1
+            zcat 0_history_data/aMI_EPZ_E14_RP3_R2.fastq.gz | awk 'NR%4==1 {print $1}' > tags.R2
+            diff -b tags.R1 tags.R2
+          #+end_src
+
+          Output is empty, meaning there is a perfect match in the order and number of tags. It just fails for some reason. *Unable to debug*. Ask Bismark permission to file a bug?
+
+***** Proceeding without RP3
+      Estimated loss of cells ~ 80?
+
+
+**** Kallisto
+
+***** (Skipped) Get Transcript and Build Index
+      Already performed in previous step.
+
+***** Quantify BAM
+
+      Here we will use the same "good" parameters we iterated towards in the Part1 (*L 70 and S 5 with single overhang*).
+
+
+****** Perform Alignment(ish)
+
+******* L 70 and S 5 with single overhang
+
+        #+begin_src bash
+          for fastq in 1_processed_by_droptag/aMI_*.fastq.gz.tagged.2.fastq.gz; do
+              outname=2_kallisto_bams_70_05_overhang/$(basename $fastq)/;
+              mkdir -p $outname;
+              kallisto quant --pseudobam --single --single-overhang -i transcript/kallisto.index -o $outname -l 70 -s 5 $fastq;
+          done
+
+          grep "p_" ./2_kallisto_bams_70_05_overhang/*/*.json -R\
+              | cut -d: -f 2,3 | sed ':a;N;$!ba;s/\n//g' | sed 's/"p_pseudo/\n"p_pseudo/g'
+
+        #+end_src
+
+        "p_pseudoaligned": 59.3,        "p_unique": 24.5,
+        "p_pseudoaligned": 59.6,        "p_unique": 24.7,
+        "p_pseudoaligned": 54.1,        "p_unique": 22.2,
+        "p_pseudoaligned": 60.4,        "p_unique": 24.5,
+        "p_pseudoaligned": 59.7,        "p_unique": 24.3,
+        "p_pseudoaligned": 59.4,        "p_unique": 23.6,
+
+        Looks good (at least, the same as before).
+
+        + Sidenote :: One thing not clear to me is how the pseudoalignments are actually quantified, since if there are at maximum N different transcripts a k-mer can belong to, then surely even after E-M on with N centers there might still be reads equidistant from all, giving a minimum fractional counts of 1/N. I do not see this in the output counts (integers) so I would guess that these reads are sensibly filtered, but I don't know the thresholds or methods.
+
+          
+**** DropEst
+
+***** Run
+
+       #+begin_src bash
+         comm=$(echo dropest -P -u -V -w -o 3_matrices_by_dropest/matrices\
+             -r 1_processed_by_droptag/aMI_*_RP{13,14,15,16,1,2,4}_R2.fastq.gz.tagged.params.gz\
+             -c tools/dropEst/configs/cel_seq2.xml\
+             2_kallisto_bams_70_05_overhang/aMI_*_RP{13,14,15,16,1,2,4}_R2.fastq.gz.tagged.2.fastq.gz/pseudoalignments.bam\
+                    | sed 's|-r |-r "|' | sed 's| -c |" -c |')
+         echo $comm
+         eval $comm
+
+         cp -v 3_matrices_by_dropest/matrices.{mtx,genes.tsv,cells.tsv} 4_output_matrix/
+       #+end_src
+
+
+***** Summary
+
+      #+begin_src bash
+      wc -l 4_output_matrix/matrices.{genes,cells}.tsv | head -2
+      #+end_src
+
+      29717 4_output_matrix/matrices.genes.tsv
+       3291 4_output_matrix/matrices.cells.tsv
+
+       That is a *lot* of cells detected, meaning the cell correction either didn't apply, or we're missing some paramaters
+
+       #+begin_src bash
+       tail -n+3 4_output_matrix/matrices.mtx | cut -d' ' -f 3 | sort -nk 1 | uniq -c
+       #+end_src
+
+       #+RESULTS:
+       | 34892 |  1 |
+       |  1694 |  2 |
+       |   367 |  3 |
+       |   128 |  4 |
+       |    75 |  5 |
+       |    65 |  6 |
+       |    52 |  7 |
+       |    58 |  8 |
+       |    46 |  9 |
+       |    22 | 10 |
+       |    17 | 11 |
+       |    10 | 12 |
+       |     5 | 13 |
+       |     6 | 14 |
+       |     1 | 15 |
+
+       #+begin_src R :results ouput
+         tab <- readRDS('3_matrices_by_dropest/matrices.rds')
+         print("Raw")
+         print(dim(tab$cm_raw))
+         print("Filtered")
+         print(dim(tab$cm))
+         print("Lib Sizes")
+         print(summary(colSums(tab$cm)))
+       #+end_src
+
+       #+RESULTS:
+       : [Raw]          47742 56028
+       : [Filtered]     29717  3291
+       : [Lib Sizes]
+       : Min. 1st Qu.  Median    Mean 3rd Qu.    Max.
+       : 104.0   126.0   141.0   152.5   165.0   951.0
+
+
+       Minimum library size of a filtered cell is 100, and max is ~ 1000. Something doesn't feel right for them to be this low.
+
+
+***** Run2: Expect 600 cells
+
+      Okay let's run this again, this time specifying that we want no more than 600 cells. I will be surprised if this changes anything.
+
+
+       #+begin_src bash
+         mkdir 3_matrices_by_dropest_600;
+         comm=$(echo dropest -P -u -V -C 600 -w -o 3_matrices_by_dropest_600/matrices\
+             -r 1_processed_by_droptag/aMI_*_RP{13,14,15,16,1,2,4}_R2.fastq.gz.tagged.params.gz\
+             -c tools/dropEst/configs/cel_seq2.xml\
+             2_kallisto_bams_70_05_overhang/aMI_*_RP{13,14,15,16,1,2,4}_R2.fastq.gz.tagged.2.fastq.gz/pseudoalignments.bam\
+                    | sed 's|-r |-r "|' | sed 's| -c |" -c |')
+         echo $comm
+         eval $comm
+
+       #+end_src
+
+      #+begin_src bash :results output
+      wc -l /extra/bismark/3_matrices_by_dropest_600/matrices.{genes,cells}.tsv | head -2
+      #+end_src
+
+      #+RESULTS:
+      :  19028 /extra/bismark/3_matrices_by_dropest_600/matrices.genes.tsv
+      :    600 /extra/bismark/3_matrices_by_dropest_600/matrices.cells.tsv
+
+
+      Nice, this time it looks like it counted cells properly. Let's see the level of merging:
+
+       #+begin_src bash
+       tail -n+3 /extra/bismark/3_matrices_by_dropest_600/matrices.mtx | cut -d' ' -f 3 | sort -nk 1 | uniq -c
+       #+end_src
+
+       #+RESULTS:
+       | 99723 |  1 |
+       |  5837 |  2 |
+       |  1421 |  3 |
+       |   585 |  4 |
+       |   332 |  5 |
+       |   217 |  6 |
+       |   157 |  7 |
+       |   121 |  8 |
+       |   107 |  9 |
+       |    93 | 10 |
+       |    95 | 11 |
+       |    92 | 12 |
+       |    79 | 13 |
+       |    66 | 14 |
+       |    51 | 15 |
+       |    32 | 16 |
+       |    25 | 17 |
+       |     5 | 18 |
+       |     8 | 19 |
+       |     3 | 20 |
+       |     1 | 22 |
+
+       Spread of detectability has not changed significantly, but there is a slight upshift in expression as expected, so cell barcodes were likely merged.
+
+       #+begin_src R :results ouput
+         tab <- readRDS('/extra/bismark/3_matrices_by_dropest_600/matrices.rds')
+         library(Matrix)
+         print("Raw")
+         print(dim(tab$cm_raw))
+         print("Filtered")
+         print(dim(tab$cm))
+         print("Lib Sizes")
+         print(summary(colSums(tab$cm)))
+       #+end_src
+
+       #+RESULTS:
+       : [Raw]          47742 56028
+       : [Filtered]     19028   600
+       : [Lib Sizes]
+       :  Min. 1st Qu.  Median    Mean 3rd Qu.    Max.
+       : 158.0   186.0   204.0   218.4   234.2   951.0
+
+       Max has not changed, but overall upshift of all other values. Still, this is very low quality and I don't know why.
+
+       #+begin_src R
+       head(colSums(tab$cm)))
+       #+end_src
+
+       #+RESULTS:
+       : GCGTGTAG GTTTGAAC TGGTGTTG GTGTGGAC TGTATTTG TTGTGTAT
+       : 177      180      180      185      186      187
+
+       Ah... it appears that the cell barcodes here are 8bp long, and the 6bp used for CELSeq2. I believe the original CELSeq used 8bp, and this could be another bug in DropEst. If we explore the config file =dropEst/configs/cel_seq2.xml=:
+
+       #+begin_src xml
+         <config>
+             <!-- droptag -->
+             <TagsSearch>
+                 <protocol>cel_seq2</protocol>
+                 <MultipleBarcodeSearch>
+                     <barcode_starts>0</barcode_starts>
+                     <barcode_lengths>8</barcode_lengths>
+                     <umi_start>8</umi_start>
+                     <umi_length>4</umi_length>
+                 </MultipleBarcodeSearch>
+
+                 <Processing>
+                     <min_align_length>10</min_align_length>
+                     <reads_per_out_file>10000000</reads_per_out_file>
+                 </Processing>
+             </TagsSearch>
+
+             <!-- dropest -->
+             <Estimation>
+                 <Merge>
+                     <max_cb_merge_edit_distance>4</max_cb_merge_edit_distance>
+                     <max_umi_merge_edit_distance>1</max_umi_merge_edit_distance>
+                     <min_genes_after_merge>100</min_genes_after_merge>
+                     <min_genes_before_merge>20</min_genes_before_merge>
+                 </Merge>
+             </Estimation>
+         </config>
+       #+end_src
+
+       Well, we can see that it was definitely using the old protocol.
+       I guess I will change this file, write an angry bug report to the DropEst team, and re-run with CELSeq2 params
+
+
+* Second Attempt
+
+  This attempt addresses the misconfiguring in the previous section where DropEst uses the default =cel_seq2.xml= file, which was later discovered to be the CELSeq1 protocol and not CELSeq2 protocol used by the MPI. We will patch the config and rerun everything in one go.
+
+** Reconfigure XML
+
+   UMI is first 6, then CB as last 6, and then the sequence.
+
+   #+begin_src xml :file tools/dropest/configs/celseq2_MPI.xml
+     <config>
+         <!-- droptag -->
+         <TagsSearch>
+             <protocol>cel_seq2</protocol>
+             <MultipleBarcodeSearch>
+                 <umi_start>0</umi_start>
+                 <umi_length>6</umi_length>
+                 <barcode_starts>6</barcode_starts>
+                 <barcode_lengths>6</barcode_lengths>
+             </MultipleBarcodeSearch>
+
+             <Processing>
+                 <min_align_length>10</min_align_length>
+                 <reads_per_out_file>10000000</reads_per_out_file>
+             </Processing>
+         </TagsSearch>
+
+         <!-- dropest -->
+         <Estimation>
+             <Merge>
+                 <max_cb_merge_edit_distance>4</max_cb_merge_edit_distance>
+                 <max_umi_merge_edit_distance>1</max_umi_merge_edit_distance>
+                 <min_genes_after_merge>100</min_genes_after_merge>
+                 <min_genes_before_merge>20</min_genes_before_merge>
+             </Merge>
+         </Estimation>
+     </config>
+
+   #+end_src
+
+   Now let's move all the other files into a new directory. The current project tree is thus:
+
+   #+begin_src bash :results output
+   tree /extra/bismark/ -I tools -d -L 3
+   #+end_src
+
+   #+RESULTS:
+   #+begin_example
+   /extra/bismark/
+   ├── 0_history_data
+   ├── initial
+   │   ├── part1
+   │   │   ├── 0_history_data
+   │   │   ├── 1_processed_by_droptag
+   │   │   ├── 2_kallisto_bams_110_30
+   │   │   ├── 2_kallisto_bams_70_05
+   │   │   ├── 2_kallisto_bams_70_05_overhang
+   │   │   ├── 2_kallisto_bams_82_10
+   │   │   ├── 2_kallisto_bams_82_25
+   │   │   ├── 3_matrices_by_dropest
+   │   │   ├── 3_matrices_by_dropest_70_05
+   │   │   ├── 3_matrices_by_dropest_70_05_overhang
+   │   │   └── 4_output_matrix
+   │   └── part2
+   │       ├── 0_history_data_2
+   │       ├── 1_processed_by_droptag
+   │       ├── 2_kallisto_bams
+   │       ├── 2_kallisto_bams_70_05_overhang
+   │       ├── 3_matrices_by_dropest
+   │       ├── 3_matrices_by_dropest_600
+   │       └── 4_output_matrix
+   ├── second
+   └── transcript
+
+   24 directories
+   #+end_example
+
+   We will perform the analysis in the =second= directory.
+
+   
+** Run the analysis
+
+**** Note about whitelists
+
+     It does not seem like DropEst takes a barcode whitelist, at least not one I can discern from the parameters in =dropEst/configs/config_desc.xml=, nor from any [[https://github.com/hms-dbmi/dropEst/issues/12][issues reported]] online.
+
+
+**** DropTag
+     
+     Here we instead use the =celseq2_MPI.xml= file we generated before
+     
+     It would be nice to use =xargs= or =parallel= here, but we have no idea if droptag is threadsafe, so sequential processing is better.
+
+
+     #+begin_src bash
+       mkdir -p second/1_processed_by_droptag;
+
+       droptag -c tools/dropEst/configs/celseq2_MPI.xml -s -S 0_history_data/aMI_EPZ_E14_RP1_R{1,2}.fastq.gz
+       droptag -c tools/dropEst/configs/celseq2_MPI.xml -s -S 0_history_data/aMI_EPZ_E14_RP2_R{1,2}.fastq.gz
+       droptag -c tools/dropEst/configs/celseq2_MPI.xml -s -S 0_history_data/aMI_EPZ_E14_RP3_R{1,2}.fastq.gz
+       droptag -c tools/dropEst/configs/celseq2_MPI.xml -s -S 0_history_data/aMI_EPZ_E14_RP4_R{1,2}.fastq.gz
+       droptag -c tools/dropEst/configs/celseq2_MPI.xml -s -S 0_history_data/aMI_DMSO_E14_RP13_R{1,2}.fastq.gz
+       droptag -c tools/dropEst/configs/celseq2_MPI.xml -s -S 0_history_data/aMI_DMSO_E14_RP14_R{1,2}.fastq.gz
+       droptag -c tools/dropEst/configs/celseq2_MPI.xml -s -S 0_history_data/aMI_DMSO_E14_RP15_R{1,2}.fastq.gz
+       droptag -c tools/dropEst/configs/celseq2_MPI.xml -s -S 0_history_data/aMI_DMSO_E14_RP16_R{1,2}.fastq.gz
+
+       mv *.fastq.gz second/1_processed_by_droptag;
+     #+end_src
+
+     
+     A quick peek at the dataset confirms it has demultiplexed the dataset correctly
+
+     #+begin_src bash
+       zcat second/1_processed_by_droptag/aMI_DMSO_E14_RP13_R2.fastq.gz.tagged.params.gz | cut -d ' ' -f 2,3 | pv | sort | uniq -c | sort -rnk 1 | head -10
+     #+end_src
+
+     #+RESULTS:
+     | 21407 | ACGACT | CACTTG |
+     |  9120 | AAACGT | ACTAAA |
+     |  6255 | AATGAG | ATGGAA |
+     |  5274 | ATGGCG | TGGAAT |
+     |  3314 | AATGAG | ACGGAA |
+     |  2842 | AAACGT | ACTGAA |
+     |  2683 | AAAAAA | AAAAAA |
+     |  2309 | TTTTTT | TTTTTT |
+     |  2279 | CAGAAG | GGGGGG |
+     |  2054 | GACAGA | GGGGGG |
+
+     So good, we have barcodes and umis. 
+     
+     + Note :: We still have the problem of not being able to feed in a whitelist of accepted barcodes to help erroneous barcodes merge, and instead relying on DropEst to make this estimate for us (which could be wrong!).
+
+
+**** Debugging the RP3 dataset
+
+     So I still have no idea why this particular dataset does not produce a =2.tagged.fastq.gz= output. I assumed that perhaps there were a few bad reads causing the issue, so I attempted to perform a binary search by splitting the data in half and seeing if the problem persists.
+
+     #+begin_src bash 
+       # Only first 5 million reads
+       zcat 0_history_data/aMI_EPZ_E14_RP3_R1.fastq.gz | awk 'NR<=20000000' | pv | gzip > 0_history_data/aMI_EPZ_E14_RP3_R1.before5e6.fastq.gz
+       zcat 0_history_data/aMI_EPZ_E14_RP3_R2.fastq.gz | awk 'NR<=20000000' | pv | gzip > 0_history_data/aMI_EPZ_E14_RP3_R2.before5e6.fastq.gz
+       # Everything after first 5 million reads
+       zcat 0_history_data/aMI_EPZ_E14_RP3_R1.fastq.gz | awk 'NR>20000000' | pv | gzip > 0_history_data/aMI_EPZ_E14_RP3_R1.after5e6.fastq.gz
+       zcat 0_history_data/aMI_EPZ_E14_RP3_R2.fastq.gz | awk 'NR>20000000' | pv | gzip > 0_history_data/aMI_EPZ_E14_RP3_R2.after5e6.fastq.gz
+     #+end_src
+
+     Running =droptag= on these four datasets yielded still the same lack of =2.tagged.fastq.gz=, which means either that the problem is deeper than just the reads, or that there are more than 1 faulty reads in the dataset. 
+
+     Either way, I cannot debug this further and should submit a bug report. I will ask Bismark again for permission to do so. For now we will ignore from the rest of the analysis as before.
+
+**** Kallisto
+
+***** Quantify BAM
+
+      Here we will use the same "good" parameters we iterated towards in the Part1 (*L 70 and S 5 with single overhang*).
+
+****** Perform Alignment(ish)
+
+       We will use the same mapping properties as before. Hopefully, we should see a drastic improvement, now that our reads are properly demultiplexed.
+
+******* L 70 and S 5 with single overhang
+
+        #+begin_src bash
+          for fastq in second/1_processed_by_droptag/aMI_*.fastq.gz.tagged.2.fastq.gz; do
+              outname=second/2_kallisto_bams_70_05_overhang/$(basename $fastq)/;
+              mkdir -p $outname;
+              kallisto quant --pseudobam --single --single-overhang -i transcript/kallisto.index -o $outname -l 70 -s 5 $fastq;
+          done
+
+          grep "p_" second/2_kallisto_bams_70_05_overhang/*/*.json -R\
+              | cut -d: -f 2,3 | sed ':a;N;$!ba;s/\n//g' | sed 's/"p_pseudo/\n"p_pseudo/g'
+
+        #+end_src
+
+        #+RESULTS:
+        : "p_pseudoaligned": 60.2,        "p_unique": 25.0,
+        : "p_pseudoaligned": 59.3,        "p_unique": 24.5,
+        : "p_pseudoaligned": 59.6,        "p_unique": 24.7,
+        : "p_pseudoaligned": 54.1,        "p_unique": 22.2,
+        : "p_pseudoaligned": 60.4,        "p_unique": 24.5,
+        : "p_pseudoaligned": 59.7,        "p_unique": 24.3,
+        : "p_pseudoaligned": 59.4,        "p_unique": 23.6,
+
+
+******* Comparison with previous results
+
+        If we compare this to previous mapping rates:
+
+        | "p_pseudoaligned": 59.3, | "p_unique": 24.5, |
+        | "p_pseudoaligned": 59.6, | "p_unique": 24.7, |
+        | "p_pseudoaligned": 54.1, | "p_unique": 22.2, |
+        | "p_pseudoaligned": 60.4, | "p_unique": 24.5, |
+        | "p_pseudoaligned": 59.7, | "p_unique": 24.3, |
+        | "p_pseudoaligned": 59.4, | "p_unique": 23.6, |
+        
+        We see very marginal improvements. Why is this?
+
+        One reason: Kallisto performs pseudoalignment by partially mapping a read against contiguous k-mers in a DeBroujin graph, where it is allowed to 'skip' some kmers if those kmers share the same kmer class of transcripts, and instead maps later portions of the read to other kmers downstream of the graph. In essence, this skipping allows for almost the same flexibility as splice-aware alignment, and so even if the first N bp of a read are not mapped (as is the case if we still have some barcode attached to the read), it should still map the rest properly, and this is what happened here.
+
+        Another, much simpler explanation: the previous run clipped off 12bp from the start of each read (8bp BC + 4bp UMI), and this run clipped off 12 bp from the start of each read (6bp UMI + 6bp BC), so the resulting FASTQ is the same. I think the only thing that actually changed here is just the tags for each read.
+
+
+**** DropEst
+
+***** Run with defaults
+
+       #+begin_src bash
+         mkdir -p second/3_matrices_by_dropest;
+
+         comm=$(echo dropest -P -u -V -w -o second/3_matrices_by_dropest/matrices\
+             -r second/1_processed_by_droptag/aMI_*_RP{13,14,15,16,1,2,4}_R2.fastq.gz.tagged.params.gz\
+             -c tools/dropEst/configs/celseq2_MPI.xml\
+             second/2_kallisto_bams_70_05_overhang/aMI_*_RP{13,14,15,16,1,2,4}_R2.fastq.gz.tagged.2.fastq.gz/pseudoalignments.bam\
+                    | sed 's|-r |-r "|' | sed 's| -c |" -c |')
+         echo $comm
+         eval $comm
+
+       #+end_src
+
+****** Check output
+
+       #+begin_src R
+         tab <- readRDS('second/3_matrices_by_dropest/matrices.rds')
+         dim(tab$cm)
+         summary(colSums(tab$cm))
+         sum(colSums(tab$cm) > 1000)
+         sum(colSums(tab$cm) > 10000)
+       #+end_src
+
+       #+RESULTS
+       : [1] 47570   761
+       : Min. 1st Qu.  Median    Mean 3rd Qu.    Max.
+       :  112     175     258    3732    1536   36819
+       : [1] 194
+       : [1] 141
+
+       We have 761 cells detected without any coercion from me, and it seems that the maximum cell count is much higher than before. That being said, only 194 cells have library sizes greater than 1000, and of those 141 have more than 10 000 counts! 
+
+       This is remiscent of analyses performed when the correct barcodes have not been selected, but this is nothing that we can do with DropEst, so we just have to bear with it.
+
+
+***** Run with 550 expected cells and merge barcodes flag
+
+       #+begin_src bash
+         outdir=second/3_matrices_by_dropest_550_merge
+         mkdir -p $outdir
+
+         comm=$(echo dropest -P -u -V -w -m -C 550 -o $outdir/matrices\
+             -r second/1_processed_by_droptag/aMI_*_RP{13,14,15,16,1,2,4}_R2.fastq.gz.tagged.params.gz\
+             -c tools/dropEst/configs/celseq2_MPI.xml\
+             second/2_kallisto_bams_70_05_overhang/aMI_*_RP{13,14,15,16,1,2,4}_R2.fastq.gz.tagged.2.fastq.gz/pseudoalignments.bam\
+                    | sed 's|-r |-r "|' | sed 's| -c |" -c |')
+         echo $comm
+         eval $comm
+
+       #+end_src
+
+****** Check output
+         
+       #+begin_src R
+         tab <- readRDS('second/3_matrices_by_dropest/matrices.rds')
+         dim(tab$cm)
+         summary(colSums(tab$cm))
+         sum(colSums(tab$cm) > 1000)
+         sum(colSums(tab$cm) > 10000)
+       #+end_src
+
+       #+RESULTS
+       : [1] 47672   550
+       : Min. 1st Qu.  Median    Mean 3rd Qu.    Max.
+       :  115     181     274    5129   10144   38597
+       : [1] 191
+       : [1] 142
+
+       Surprisingly a (ever so slightly) worse than the previous run which had more cells, so I'm guessing the merging of barcodes did not go through well.
+
+
+***** Checking Barcode overlap between defaults and 550
+
+      #+begin_src R
+      tab.orig <- readRDS('second/3_matrices_by_dropest/matrices.rds')
+      tab.m500 <- readRDS('second/3_matrices_by_dropest_550_merge/matrices.rds')
+      cols.orig <- colnames(tab.orig$cm)
+      cols.m500 <- colnames(tab.m500$cm)
+      sum(cols.m550 %in% cols.orig)
+      #+end_src
+
+       #+RESULTS
+       : [1] 546
+
+       There is an overlap of 546 cells, so we know that the cells are at least reasonably robust.

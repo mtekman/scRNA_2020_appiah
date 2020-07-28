@@ -1,0 +1,17 @@
+#+TITLE: Appiah 2020 Analysis
+#+PROPERTY: header-args :exports both :eval never-export
+#+OPTIONS: H:4 num:nil toc:5
+#+EXCLUDE_TAGS: noexport
+#+AUTHOR: Mehmet Tekman
+
+
+Some deliverables for co-authorship:
+
+
+*** DONE 1. Perform DropEST analysis
+    CLOSED: [2020-04-01 Mi 12:18]
+
+    The aim was to create a dataset that would be compatible with =RNA Velocity=, and one method for this is to use the DropEST pipeline (which supports the CELseq2 protocol). This is what was performed in [[file:1_dropest.org][this notebook here]], but there was some uncertainty with quality of the cells to be produced. An alternative to RNA Velocity is the =scVelo= from the Theis Lab which is said to be just as good.
+
+
+*** DOING 2. Perform scVelo analysis
