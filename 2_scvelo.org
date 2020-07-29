@@ -1,0 +1,42 @@
+#+OPTIONS: :exports both
+#+PROPERTY: header-args :exports both :eval never-export
+#+SETUPFILE: https://fniessen.github.io/org-html-themes/setup/theme-readtheorg.setup
+#+OPTIONS: H:4 num:nil toc:5
+#+options: timestamp:nil
+#+AUTHOR: Mehmet Tekman
+
+#+TITLE: scVelo Analysis
+
+Here we will use the matrices we obtained with the dropEst Pre-processing to perform an scVelo analysis
+
+* SetupEnv
+
+   #+NAME: setupenv
+   #+begin_src python :session yes
+     # load env
+     activate_this_file = "/home/tetris/.scvelo/bin/activate_this.py"
+     f=open(activate_this_file, 'r')
+     exec(f.read(), dict(__file__=activate_this_file))
+   #+end_src
+
+   #+RESULTS: setupenv
+
+
+* Quick Start
+
+  Here we will run the test pancreas dataset
+
+   #+begin_src python :session yes
+     import scvelo as scv
+     scv.set_figure_params()
+     adata = scv.datasets.pancreas()
+   #+end_src
+
+   #+RESULTS:
+
+   #+begin_src python :session yes
+     scv.pp.filter_and_normalize(adata, **params)
+     scv.pp.moments(adata, **params)
+   #+end_src
+
+   #+RESULTS:
