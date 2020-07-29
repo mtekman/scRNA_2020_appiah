@@ -24,7 +24,7 @@ Here we will use the matrices we obtained with the dropEst Pre-processing to per
 
 * Quick Start
 
-  Here we will run the test pancreas dataset
+  Here we will run the test pancreas dataset (this does not work on org, I switch to ipynb after)
 
    #+begin_src python :session yes
      import scvelo as scv
@@ -40,3 +40,28 @@ Here we will use the matrices we obtained with the dropEst Pre-processing to per
    #+end_src
 
    #+RESULTS:
+
+* Convert RData to CSV
+
+  Let's extract the experiment matrix and the normalised matrix and see if we can get any trajectories based on them
+
+  #+begin_src R
+    tab <- readRDS('~/Downloads/Injected_cells_batch2.RData')
+    write.table(tab, file="Injected_cells_batch2.tsv", sep="\t", quote=F)
+  #+end_src
+
+* Still need to run Velocyto
+
+  So the first preprocessing ran the required dropEST stages, but still needs to run velocyto to get the right transcripts.
+
+  #+begin_src bash
+   cd 
+  #+end_src
+
+  
+
+
+
+
+
+
