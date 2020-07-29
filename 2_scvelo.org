@@ -55,13 +55,207 @@ Here we will use the matrices we obtained with the dropEst Pre-processing to per
   So the first preprocessing ran the required dropEST stages, but still needs to run velocyto to get the right transcripts.
 
   #+begin_src bash
-   cd 
+   . /home/tetris/.scvelo/bin/activate
+   cd /home/tetris/Downloads/bismark/2_kallisto_bams_70_05_overhang
+   for bam in `find -type f -name "*.bam"`; do
+       fname=../2a_corrected/$(echo $bam | sed -r 's|./([^.]+)\..*|\1|')
+       mkdir -p $fname
+       velocyto tools dropest-bc-correct $bam $fname
+   done
   #+end_src
 
+  #+RESULTS:
+
+  Download GTf file
+  ftp://ftp.ensembl.org/pub/release-99/gtf/mus_musculus/Mus_musculus.GRCm38.99.gtf.gz
+
+
+* Run STAR again
+
+  This time we ran STAR on the tagged droptag reads as outlined in the post here
+  http://velocyto.org/velocyto.py/tutorial/cli.html
+
+  It is not entirely clear which reads they specify, since ours are paired end -- but the R1 reads are just barcodes and the barcode information we have already saved in external datasets, so I just mapped the R2 reads and achieved ~50-65% unique mapping rate, which is expected for CELseq2.
+
+  Let's download these and run dropEst again.
+
+  #+begin_src python 
+     from bioblend import galaxy
+     import os
+     # Get this from https://usegalaxy.eu/user/api_key
+     your_api_key = "BLAM"
+     # Make sure this directory exists
+     gi = galaxy.GalaxyInstance(url="https://usegalaxy.eu", key=your_api_key)
+     dclient = galaxy.datasets.DatasetClient(gi)
+     hl = gi.histories.get_histories()
+     hclient = galaxy.histories.HistoryClient(gi)
+     history = [lip for lip in hl if lip['name'] == "Bismark Tagged STAR Input Datasets"][0]
+     tab = hclient.show_matching_datasets(history['id'], ".*\.bam")
+     hid_name = {x['id']:x['name'] for x in tab}
+     print("ID\tName")
+     os.mkdir("bam_sets2")
+     for hid in sorted(hid_name.keys()):
+         print(hid, hid_name[hid], sep="\t")
+         dclient.download_dataset(hid, file_path="%s/%s" % ("bam_sets2", hid_name[hid]),
+                                  use_default_filename=False)
+  #+end_src
+
+  #+RESULTS:
+  : None
+
+
+  #+begin_src python :results output
+    from bioblend import galaxy
+    import os
+    # Get this from https://usegalaxy.eu/user/api_key
+    your_api_key = "ad77d47874dfdc5bf26f6a016c9ed375"
+    # Make sure this directory exists
+    gi = galaxy.GalaxyInstance(url="https://usegalaxy.eu", key=your_api_key)
+    dclient = galaxy.datasets.DatasetClient(gi)
+    hl = gi.histories.get_histories()
+    hclient = galaxy.histories.HistoryClient(gi)
+    history = [lip for lip in hl if lip['name'] == "Bismark Tagged STAR Input Datasets"][0]
+    tab = hclient.show_matching_datasets(history['id'], ".*\.2\.fastq\.gz")
+    hid_name = {x['hid']:x['name'] for x in tab}
+    for hid in sorted(hid_name.keys()):
+        print(hid, hid_name[hid], sep="\t")
+  #+end_src
+
+  #+RESULTS:
+  : 2	http://132.230.153.85:9099/aMI_DMSO_E14_RP13_R2.fastq.gz.tagged.2.fastq.gz
+  : 4	http://132.230.153.85:9099/aMI_DMSO_E14_RP14_R2.fastq.gz.tagged.2.fastq.gz
+  : 6	http://132.230.153.85:9099/aMI_DMSO_E14_RP15_R2.fastq.gz.tagged.2.fastq.gz
+  : 8	http://132.230.153.85:9099/aMI_DMSO_E14_RP16_R2.fastq.gz.tagged.2.fastq.gz
+  : 10	http://132.230.153.85:9099/aMI_EPZ_E14_RP1_R2.fastq.gz.tagged.2.fastq.gz
+  : 12	http://132.230.153.85:9099/aMI_EPZ_E14_RP2_R2.fastq.gz.tagged.2.fastq.gz
+  : 15	http://132.230.153.85:9099/aMI_EPZ_E14_RP4_R2.fastq.gz.tagged.2.fastq.gz
+
+  Rename the BAM datasets based on the history IDs (done using =dired=)
+
+  #+begin_src bash 
+  ls ./bam_sets2/*
+  #+end_src
+
+  #+RESULTS:
+  | ./bam_sets2/aMI_DMSO_E14_RP13_R2.bam | ./bam_sets2/aMI_EPZ_E14_RP1_R2.bam |
+  | ./bam_sets2/aMI_DMSO_E14_RP14_R2.bam | ./bam_sets2/aMI_EPZ_E14_RP2_R2.bam |
+  | ./bam_sets2/aMI_DMSO_E14_RP15_R2.bam | ./bam_sets2/aMI_EPZ_E14_RP4_R2.bam |
+  | ./bam_sets2/aMI_DMSO_E14_RP16_R2.bam |                                    |
+
+  Now let's regenerate the celseq2 xml
+
+   #+begin_src xml :file ./celseq2_MPI.xml
+     <config>
+         <!-- droptag -->
+         <TagsSearch>
+             <protocol>cel_seq2</protocol>
+             <MultipleBarcodeSearch>
+                 <umi_start>0</umi_start>
+                 <umi_length>6</umi_length>
+                 <barcode_starts>6</barcode_starts>
+                 <barcode_lengths>6</barcode_lengths>
+             </MultipleBarcodeSearch>
+
+             <Processing>
+                 <min_align_length>10</min_align_length>
+                 <reads_per_out_file>10000000</reads_per_out_file>
+             </Processing>
+         </TagsSearch>
+
+         <!-- dropest -->
+         <Estimation>
+             <Merge>
+                 <max_cb_merge_edit_distance>4</max_cb_merge_edit_distance>
+                 <max_umi_merge_edit_distance>1</max_umi_merge_edit_distance>
+                 <min_genes_after_merge>100</min_genes_after_merge>
+                 <min_genes_before_merge>20</min_genes_before_merge>
+             </Merge>
+         </Estimation>
+     </config>
+
+   #+end_src
+
+   and then we run DropEST
+
+   #+begin_src bash :session new
+     . /home/tetris/.scvelo/bin/activate
+     export PATH=$PATH:/opt/dropest/bin/
+     outdir=dropest/test/
+     mkdir -p $outdir
+     dropest -m -V -b -o dropest/test/ \
+             -g /home/tetris/repos/_work/_scrna/scRNA_2020_appiah/Mus_musculus.GRCm38.99.gtf \
+             -L eiEIBA \
+             -c /home/tetris/repos/_work/_scrna/scRNA_2020_appiah/celseq2_MPI.xml \
+             /home/tetris/repos/_work/_scrna/scRNA_2020_appiah/bam_sets2/aMI_DMSO_E14_RP13_R2.bam
+   #+end_src
+
+   and we immediately get errors of =ERROR: unable to parse out UMI in: KCGN14909114= and this repeats on and on likely for all reads.
+
+   Why can it not extract the UMI? Let's have a look
+
+   #+begin_src bash
+     samtools view /home/tetris/repos/_work/_scrna/scRNA_2020_appiah/bam_sets2/aMI_DMSO_E14_RP13_R2.bam | head
+   #+end_src
+
+   #+RESULTS:
+   | KCGN13282784 | 16 | chr1 | 3010577 | 60 | 70M   | * | 0 | 0 | GAGGTTAGCAATCTAGGGTCAGATAATTATAGGTCTAGGTGCTGATTTCTGAGTTTTTGTTGGATGGGCG | JJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJ<AFA7<<A | NH:i:1 | HI:i:1 | AS:i:68 | nM:i:0 |
+   | KCGN12771152 | 16 | chr1 | 3010578 | 60 | 70M   | * | 0 | 0 | AGGTTAGCAATCTAGGGTCAGATAATTATAGGTCTAGGTGCTGATTTCTGAGTTTTTGTTGGATGGGCGT | JJJJJJJJJJJJJJJJJJJFJAJ<JJJJJJFFJJJJJJFJJJJJJJJJJFAJJJJJJJFJA<-F7-7-<A | NH:i:1 | HI:i:1 | AS:i:68 | nM:i:0 |
+   | KCGN11152450 | 16 | chr1 | 3010646 | 60 | 70M   | * | 0 | 0 | GGTTTGTTTGTTTTTTTTGTTTGTTTGTTTGTTTTTTCTGTTTCCTTTTCAGTTTTTTGGCTTTTGTGAT | JJJJJJJJJJJJJJJJJJJJJJFJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJFFJJJJJJJFAAF<A | NH:i:1 | HI:i:1 | AS:i:68 | nM:i:0 |
+   | KCGN11152487 | 16 | chr1 | 3010652 | 60 | 70M   | * | 0 | 0 | GTTTTTGGTTTGTTTGTTTTTTTTGTTTGTTTGTTTGTTTTTTCTGTTTCCTTTTCAGTTTTTTGGCTTT | FJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJFFJJFJJFF<<A | NH:i:1 | HI:i:1 | AS:i:68 | nM:i:0 |
+   | KCGN11152541 | 16 | chr1 | 3010680 | 60 | 70M   | * | 0 | 0 | TTGTTTTTTCTGTTTCCTTTTCAGTTTTTTGGCTTTTGTGATCTGGATTTTTGATGGCTATCATGACCTC | FJJJJJJJFJJJJFJFJJJJJJJJJJJJJJFJJJJJFFJFJJJJJJJJJJJJJJJJAJJJJJJF7-77<- | NH:i:1 | HI:i:1 | AS:i:68 | nM:i:0 |
+   | KCGN11152627 | 16 | chr1 | 3010714 | 60 | 69M1S | * | 0 | 0 | TTTGTGATCTGGATTTTTGATGGCTATCATGACCTCTGAATGACTAGGGAATCTTGGACCACATTGGGGA | JJJJJJJJJJJJJJJJJJJJJJFFJFJFJJA<JJJJJJJJJJFJJFJFJJJJJJJJJ-FJAJJJJF<<<A | NH:i:1 | HI:i:1 | AS:i:67 | nM:i:0 |
+   | KCGN11500167 | 16 | chr1 | 3010715 | 60 | 70M   | * | 0 | 0 | TTTTGATCTGGATTTTTGCTGGCTATCATGACCTCTGAGTGACTAGCGAATCTTGGCCCACATTGGGGGC | JF-AFAA<-F-------7-JF7-7JFJF-F<7A--JF<-<-<-<-<-<--F7<-77----AA<F--<<-- | NH:i:1 | HI:i:1 | AS:i:58 | nM:i:5 |
+   | KCGN11152468 | 16 | chr1 | 3010727 | 60 | 70M   | * | 0 | 0 | TTTTTGATGGCTATCATGACCTCTGAATGACTAGGGAATCTTGGACCACATTGGGGGCCTCTACTAGCTG | JJJJJJJJJJFJJJJJJJJJJJJJJFJFJJAFAJJJJJJJJJJFFJFJJJJJJFJAJ<JJJJFJJF77<A | NH:i:1 | HI:i:1 | AS:i:68 | nM:i:0 |
+   | KCGN11500219 | 16 | chr1 | 3010740 | 60 | 67M3S | * | 0 | 0 | TCATGACCTCTGAATGACTAGGGAATCTTGGACCACATTGGGGGCCTCTACTAGCTGTTAGCTTGGCCTC | JJJJJJJJJJJJJJJJJJJJJJFJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJFJJJA7<<<A | NH:i:1 | HI:i:1 | AS:i:65 | nM:i:0 |
+   | KCGN11152560 | 16 | chr1 | 3010755 | 60 | 69M1S | * | 0 | 0 | GACTAGGGAATCTTGGACCACATTGGGGGCCTCTACTAGCTGTTAGCTTGGCATTTGGTACCATGCGGGC | JFJJFJJJJJJJJJJJJJJJJJJJJJJFJJJJJJJJJJJJJJJJFJJJJJJJJJJJJJJJJFJJJ<A<<- | NH:i:1 | HI:i:1 | AS:i:67 | nM:i:0 |
+
+   It could be that since they were mapped in STAR using only the R2 reads, the barcoding info (in R1 reads) are lost. I assumed  that it could recuperate this info from the external data, but apparently not.
   
+   Let's try with the =-r= flag which we can feed params into.
 
+   #+begin_src bash
+     dropest -m -V -b -o dropest/test/ \
+             -r  /home/tetris/Downloads/bismark/1_processed_by_droptag/aMI_DMSO_E14_RP13_R2.fastq.gz.tagged.params.gz \
+             -g /home/tetris/repos/_work/_scrna/scRNA_2020_appiah/Mus_musculus.GRCm38.99.gtf \
+             -L eiEIBA \
+             -c ls d/home/tetris/repos/_work/_scrna/scRNA_2020_appiah/celseq2_MPI.xml \
+             /home/tetris/repos/_work/_scrna/scRNA_2020_appiah/bam_sets2/aMI_DMSO_E14_RP13_R2.bam
+   #+end_src
 
+   So this time, the errors are parsed correctly, but we get =WARNING: Can't find chromosome 'chr1'= for all chromosomes, where it later tells us that it cant find any cells above acceptable thresholds.
 
+   So what do we do? We change the GTF file so that every data line is prepended with 'chr', this will work flawlessly with all canonical chromosomes but we will see some small errors for less well defined chromosome such as =chrUn_*_random=
 
+   #+begin_src bash :session new
+     #note change in GTF
+     dropest -m -V -b -o dropest/test/out \
+             -r  /home/tetris/Downloads/bismark/1_processed_by_droptag/aMI_DMSO_E14_RP13_R2.fastq.gz.tagged.params.gz \
+             -g /home/tetris/repos/_work/_scrna/scRNA_2020_appiah/Mus_musculus.GRCm38.99.chr.gtf \
+             -L eiEIBA \
+             -c ls d/home/tetris/repos/_work/_scrna/scRNA_2020_appiah/celseq2_MPI.xml \
+             /home/tetris/repos/_work/_scrna/scRNA_2020_appiah/bam_sets2/aMI_DMSO_E14_RP13_R2.bam
+   #+end_src
 
+   This time we actually got most of our reads to align fine, with 17.9% intergenic, 50.1% touch exon, 23% touch intron, 1.61% touch both gene and not annotated regions, can't parse 9.58667% reads, ), 0 non-mapped reads, 3865 CBs read. So we lost 10% of our reads but this might actually be fine for analysis. It even detected 671 cells for this batch alone (if that is accurate?)
 
+   Let us see if we can complete the rest of this hacky workflow.
+
+   #+begin_src bash :session new
+     velocyto tools dropest-bc-correct /home/tetris/repos/_work/_scrna/scRNA_2020_appiah/bam_sets2/aMI_DMSO_E14_RP13_R2.bam dropest/test/out.rds
+   #+end_src
+
+   Edit: nope! We get the same error that we got in the previous workflow:
+
+   =UnboundLocalError: local variable 'convert_r_obj' referenced before assignmen=
+
+   where this error is referenced here: https://github.com/velocyto-team/velocyto.py/issues/224
+
+   I managed to submit a bug report and fix this error (missing rpy2), but then it threw errors relating to not being able to find the CB tag in the BAM file for the cell barcodes. (This is just typical.)
+
+   #+begin_src 
+     velocyto run-dropest -b /home/tetris/Downloads/bismark/1_processed_by_droptag/aMI_DMSO_E14_RP13_R2.fastq.gz.tagged.rds -o dropest/test_results /home/tetris/repos/_work/_scrna/scRNA_2020_appiah/bam_sets2/aMI_DMSO_E14_RP13_R2.bam ./Mus_musculus.GRCm38.99.chr.gtf
+   #+end_src
+
+   What to do...
+
+   So for some reason our BAM file is not tagged, and to be honest -- why would it be? We have given no special commands to STAR during the alignment, so I assumed it would rely on external files such as those given in the =tagged.params.gz= or =tagged.rds= which are output from dropEST.
