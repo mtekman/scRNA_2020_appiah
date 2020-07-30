@@ -5,7 +5,7 @@
 #+AUTHOR: Mehmet Tekman
 
 
-Some deliverables for co-authorship:
+Some deliverables:
 
 
 *** DONE 1. Perform DropEST analysis

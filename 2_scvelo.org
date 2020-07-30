@@ -11,7 +11,7 @@ Here we will use the matrices we obtained with the dropEst Pre-processing to per
 
 *  Testing scVelo
 
-  Here and in [[file:testscvelo.ipynb][testscvelo.ipynb]] we run the toy dataset to establish how quick and easy the analysis is. 
+  Here and in [[file:files/2_scvelo/toydataset.ipynb][this notebook]] we run the toy dataset to establish how quick and easy the analysis is. 
 
 **** SetupEnv
 
@@ -50,7 +50,7 @@ Here we will use the matrices we obtained with the dropEst Pre-processing to per
 
 * Test with RaceID Matrix and DropEst Matrix
 
-  The full notebook of experimentation can be found [[file:Untitled.ipynb][here]], but below are some small snippets.
+  The full notebook of experimentation can be found [[file:files/2_scvelo/testRaceID.and.dropEST.ipynb][here]] but below are some small snippets.
 
 ** RaceID Matrix
 
@@ -95,7 +95,7 @@ Here we will use the matrices we obtained with the dropEst Pre-processing to per
 
 * Re-Run dropTag BAM files on STAR
 
-  This time we ran STAR on the tagged droptag reads as outlined [[http://velocyto.org/velocyto.py/tutorial/cli.html][in the materials]]. This time, we need a GTF file so I took the [[ftp://ftp.ensembl.org/pub/release-99/gtf/mus_musculus/Mus_musculus.GRCm38.99.gtf.gz][mm10 from Ensembl]]. 
+  This time we ran STAR on the tagged droptag reads as outlined [[http://velocyto.org/velocyto.py/tutorial/cli.html][in the materials]]. This time, we need a GTF file so I took the [[ftp://ftp.ensembl.org/pub/release-99/gtf/mus_musculus/Mus_musculus.GRCm38.99.gtf.gz][mm10 from Ensembl]].
 
   I uploaded the dropTag files to the Galaxy history /Bismark Tagged STAR Input Datasets/ and ran STAR on them.
 
