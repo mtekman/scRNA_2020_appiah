@@ -15,4 +15,5 @@ Some deliverables for co-authorship:
 
 
 *** DOING 2. Perform scVelo analysis
-
+    
+    This did not provide any good output. The downstream =scvelo= tool is very impressive and easy to work with, but requires very specific input matrices that should be generated from =velocyto=. The problem is that the velocyto pipeline is not very straightforward and there is a huge mismatch between the tools and the materials. 
