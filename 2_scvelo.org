@@ -9,7 +9,11 @@
 
 Here we will use the matrices we obtained with the dropEst Pre-processing to perform an scVelo analysis
 
-* SetupEnv
+*  Testing scVelo
+
+  Here and in [[file:testscvelo.ipynb][testscvelo.ipynb]] we run the toy dataset to establish how quick and easy the analysis is. 
+
+**** SetupEnv
 
    #+NAME: setupenv
    #+begin_src python :session yes
@@ -21,10 +25,9 @@ Here we will use the matrices we obtained with the dropEst Pre-processing to per
 
    #+RESULTS: setupenv
 
+**** Quick Start
 
-* Quick Start
-
-  Here we will run the test pancreas dataset (this does not work on org, I switch to ipynb after)
+  Here we will run the test pancreas dataset (this does not work on org, so I switch to ipynb after, please see the above test jupyter notebook.)
 
    #+begin_src python :session yes
      import scvelo as scv
@@ -41,22 +44,40 @@ Here we will use the matrices we obtained with the dropEst Pre-processing to per
 
    #+RESULTS:
 
-* Convert RData to CSV
+**** Thoughts
 
-  Let's extract the experiment matrix and the normalised matrix and see if we can get any trajectories based on them
+     From an input dataset to a final labelled plot, the scvelo pipeline is fairly quick and straightforward to perform. The input dataset does require many annotations that you would not encounter in a normal Anndata dataset, so I am doubtful that this would be so easy on any matrix that has not been processed with DropEst/Velocyto beforehand.
+
+* Test with RaceID Matrix and DropEst Matrix
+
+  The full notebook of experimentation can be found [[file:Untitled.ipynb][here]], but below are some small snippets.
+
+** RaceID Matrix
+
+  This should not work, since it has not undergone the correct preprocessing, but I am curious
+
+**** Convert RData to CSV
+
+     Let's extract the experiment matrix and see if we can get any trajectories based on them
 
   #+begin_src R
     tab <- readRDS('~/Downloads/Injected_cells_batch2.RData')
     write.table(tab, file="Injected_cells_batch2.tsv", sep="\t", quote=F)
   #+end_src
 
-* Still need to run Velocyto
+** DropEst matrix
+
+   This also did not work, because the output matrices had not yet had =velocyto tools= and then =velocyto run= performed on them. Doing this however, presented some problems:
+
+
+* Velocyto on DropEST Matrix
 
   So the first preprocessing ran the required dropEST stages, but still needs to run velocyto to get the right transcripts.
+  The [[http://velocyto.org/velocyto.py/tutorial/cli.html][online materials]] are also really outdated, referencing incorrect commands (e.g. =dropest_bc_correct= instead of =dropest-bc-correct=) and having more required parameters than the material online suggests (such as providing the exit RDS matrix).
 
   #+begin_src bash
-   . /home/tetris/.scvelo/bin/activate
-   cd /home/tetris/Downloads/bismark/2_kallisto_bams_70_05_overhang
+   . ~/.scvelo/bin/activate
+   cd ~/Downloads/bismark/2_kallisto_bams_70_05_overhang
    for bam in `find -type f -name "*.bam"`; do
        fname=../2a_corrected/$(echo $bam | sed -r 's|./([^.]+)\..*|\1|')
        mkdir -p $fname
@@ -66,16 +87,21 @@ Here we will use the matrices we obtained with the dropEst Pre-processing to per
 
   #+RESULTS:
 
-  Download GTf file
-  ftp://ftp.ensembl.org/pub/release-99/gtf/mus_musculus/Mus_musculus.GRCm38.99.gtf.gz
+  Running this yielded nothing, because the RDS matrix is supposed to be BAM file specific (I think?) and maybe not an aggregation of several BAM files, as was performed in the previous DropEST analysis.
 
+*** What does this mean?
+    
+    The BAM files should not be merged during the =dropEst= stage, and that maybe we should re-run our dropTag'd FASTQ files through =STAR= and not =Kallisto= to obtain the desired tags. 
 
-* Run STAR again
+* Re-Run dropTag BAM files on STAR
 
-  This time we ran STAR on the tagged droptag reads as outlined in the post here
-  http://velocyto.org/velocyto.py/tutorial/cli.html
+  This time we ran STAR on the tagged droptag reads as outlined [[http://velocyto.org/velocyto.py/tutorial/cli.html][in the materials]]. This time, we need a GTF file so I took the [[ftp://ftp.ensembl.org/pub/release-99/gtf/mus_musculus/Mus_musculus.GRCm38.99.gtf.gz][mm10 from Ensembl]]. 
+
+  I uploaded the dropTag files to the Galaxy history /Bismark Tagged STAR Input Datasets/ and ran STAR on them.
 
   It is not entirely clear which reads they specify, since ours are paired end -- but the R1 reads are just barcodes and the barcode information we have already saved in external datasets, so I just mapped the R2 reads and achieved ~50-65% unique mapping rate, which is expected for CELseq2.
+
+*** Download STAR BAM files from Galaxy
 
   Let's download these and run dropEst again.
 
@@ -103,12 +129,15 @@ Here we will use the matrices we obtained with the dropEst Pre-processing to per
   #+RESULTS:
   : None
 
+  Here we obtain our BAM files, and now let's rename them to match the input FASTQ files.
+
+*** Rename BAM files to match FASTQ inputs
 
   #+begin_src python :results output
     from bioblend import galaxy
     import os
     # Get this from https://usegalaxy.eu/user/api_key
-    your_api_key = "ad77d47874dfdc5bf26f6a016c9ed375"
+    your_api_key = "BLAM"
     # Make sure this directory exists
     gi = galaxy.GalaxyInstance(url="https://usegalaxy.eu", key=your_api_key)
     dclient = galaxy.datasets.DatasetClient(gi)
@@ -141,6 +170,8 @@ Here we will use the matrices we obtained with the dropEst Pre-processing to per
   | ./bam_sets2/aMI_DMSO_E14_RP14_R2.bam | ./bam_sets2/aMI_EPZ_E14_RP2_R2.bam |
   | ./bam_sets2/aMI_DMSO_E14_RP15_R2.bam | ./bam_sets2/aMI_EPZ_E14_RP4_R2.bam |
   | ./bam_sets2/aMI_DMSO_E14_RP16_R2.bam |                                    |
+
+*** Regenerate CELseq2 XML
 
   Now let's regenerate the celseq2 xml
 
@@ -175,6 +206,8 @@ Here we will use the matrices we obtained with the dropEst Pre-processing to per
 
    #+end_src
 
+*** Run DropEST
+
    and then we run DropEST
 
    #+begin_src bash :session new
@@ -192,6 +225,8 @@ Here we will use the matrices we obtained with the dropEst Pre-processing to per
    and we immediately get errors of =ERROR: unable to parse out UMI in: KCGN14909114= and this repeats on and on likely for all reads.
 
    Why can it not extract the UMI? Let's have a look
+
+**** Inspect a BAM file
 
    #+begin_src bash
      samtools view /home/tetris/repos/_work/_scrna/scRNA_2020_appiah/bam_sets2/aMI_DMSO_E14_RP13_R2.bam | head
@@ -211,7 +246,9 @@ Here we will use the matrices we obtained with the dropEst Pre-processing to per
 
    It could be that since they were mapped in STAR using only the R2 reads, the barcoding info (in R1 reads) are lost. I assumed  that it could recuperate this info from the external data, but apparently not.
   
-   Let's try with the =-r= flag which we can feed params into.
+*** Run DropEST with Params file
+
+   Let's try with the =-r= flag which we can feed the params file into.
 
    #+begin_src bash
      dropest -m -V -b -o dropest/test/ \
@@ -225,6 +262,10 @@ Here we will use the matrices we obtained with the dropEst Pre-processing to per
    So this time, the errors are parsed correctly, but we get =WARNING: Can't find chromosome 'chr1'= for all chromosomes, where it later tells us that it cant find any cells above acceptable thresholds.
 
    So what do we do? We change the GTF file so that every data line is prepended with 'chr', this will work flawlessly with all canonical chromosomes but we will see some small errors for less well defined chromosome such as =chrUn_*_random=
+
+
+*** Run DropEST with Params file and 'chr'-prefixed GTF file
+
 
    #+begin_src bash :session new
      #note change in GTF
@@ -240,6 +281,8 @@ Here we will use the matrices we obtained with the dropEst Pre-processing to per
 
    Let us see if we can complete the rest of this hacky workflow.
 
+*** Performing the rest of the analysis
+
    #+begin_src bash :session new
      velocyto tools dropest-bc-correct /home/tetris/repos/_work/_scrna/scRNA_2020_appiah/bam_sets2/aMI_DMSO_E14_RP13_R2.bam dropest/test/out.rds
    #+end_src
@@ -250,12 +293,40 @@ Here we will use the matrices we obtained with the dropEst Pre-processing to per
 
    where this error is referenced here: https://github.com/velocyto-team/velocyto.py/issues/224
 
-   I managed to submit a bug report and fix this error (missing rpy2), but then it threw errors relating to not being able to find the CB tag in the BAM file for the cell barcodes. (This is just typical.)
+   I managed to [[https://github.com/velocyto-team/velocyto.py/issues/224][submit a bug report]] and fix this error (it was missing a specific version of rpy2), but then it threw errors relating to not being able to find the CB tag in the BAM file for the cell barcodes.
 
    #+begin_src 
      velocyto run-dropest -b /home/tetris/Downloads/bismark/1_processed_by_droptag/aMI_DMSO_E14_RP13_R2.fastq.gz.tagged.rds -o dropest/test_results /home/tetris/repos/_work/_scrna/scRNA_2020_appiah/bam_sets2/aMI_DMSO_E14_RP13_R2.bam ./Mus_musculus.GRCm38.99.chr.gtf
    #+end_src
 
-   What to do...
+*** What to do
 
-   So for some reason our BAM file is not tagged, and to be honest -- why would it be? We have given no special commands to STAR during the alignment, so I assumed it would rely on external files such as those given in the =tagged.params.gz= or =tagged.rds= which are output from dropEST.
+   So for some reason our BAM file is not tagged, and to be honest -- why would it be? We have given no special commands to STAR during the alignment, so I assumed it would rely on external files such as those given in the =tagged.params.gz= or =tagged.rds= which are output from =dropTAG=.
+
+   My next guess would then be that the =dropTAG= step was either not performed correctly, or that the relevant metadata (such as barcodes) is not passed into the =dropest-bc-correct= or the =run-dropest= commands properly.
+
+
+** Note
+
+ At this point two issues started to become apparent:
+
+*** 1. The current tools and their materials are mismatched
+
+    The tool names given in the training material are outdated, and the newer tools require more mandatory arguments that the material makes no reference to.
+
+    The alignment and quantification steps are not clear either as some steps prefer the use of alignment-free tools such as Kallisto (as was performed previously), and others prefer the use of STAR.
+
+*** 2. The tools are badly written 
+
+    Why does a Python tool (=velocyto=) need to write out RData matrices? Especially when the next stage of analysis is again a Python library (=scvelo=)? 
+
+    I also ran into several problems trying to get the tools running, and submitted a [[https://github.com/velocyto-team/velocyto.py/issues/224][bug report]] to the team to actually list their dependencies or to provide a conda environment that is not broken. DropEst itself had to be built from scratch to actually get it to work.
+  
+
+* How to proceed
+
+  This pipeline is mess, and this is saying something as I am quite used to working with messy pipelines. 
+
+  I believe a full pre-processing would need to be performed so that the =dropTAG= to =STAR= steps produce the required tags in the BAM file. I imagine this will take a lot of trial and error since the materials do not seem to reference this issue but [[https://github.com/velocyto-team/velocyto.py/issues/251][I am not alone in this problem]] as one of the many many frustrated users of this pipeline.
+
+  The above and related notebooks are the output of 1-2 days worth of work. If I work on this solidly for a week I might be able to get this working.
