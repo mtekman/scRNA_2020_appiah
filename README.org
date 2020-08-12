@@ -14,6 +14,14 @@ Some deliverables:
     The aim was to create a dataset that would be compatible with =RNA Velocity=, and one method for this is to use the DropEST pipeline (which supports the CELseq2 protocol). This is what was performed in [[file:1_dropest.org][this notebook here]], with the results accessible in this [[https://usegalaxy.eu/u/mehmet-tekman/h/bismark-dropest-data][galaxy history here]], but there was some uncertainty with quality of the cells to be produced. An alternative to RNA Velocity is the =scVelo= from the Theis Lab which is said to be just as good.
 
 
-*** DOING 2. Perform scVelo analysis
+*** PAUSED 2. Perform scVelo analysis
     
     This did not provide any good output. The downstream =scvelo= tool is very impressive and easy to work with, but requires very specific input matrices that should be generated from =velocyto=. The problem is that the velocyto pipeline is not very straightforward and there is a huge mismatch between the tools and the materials. 
+
+    As of <2020-08-12 Mi 16:15> this is set into the PAUSED state due to various complications in producing the desired matrices for use with scVelo. Bug reports have been submitted to the Theis Github repository in relation to this.
+
+*** DOING 3. Perform ScanPy analysis
+
+    An initial attempt was made using the raw matrix from the microinjected cells, but these gave very variable clustering as seen across Seurat and ScanPy, and discovering the same cell identities in the clusters as those given by Bismark was not possible. Only 1 cluster had good overlap.
+
+    A second attempt was made <2020-08-12 Mi>  which made better use of the existing Seurat objects for both Electrochorated Cells (ECS) and the Microinject Cells (MCS) to extract the raw and filtered expression matrices, along with meta data of the cells relating to seurat cluster assignments (so that marker gene discovery would not be strictly required in ScanPy if the same cells are clustered in the same groups). The ECS cell clusters were robust across both the ScanPy and Seurat pipelines, however the MCS cell clusters had some issues which I am currently resolving.
